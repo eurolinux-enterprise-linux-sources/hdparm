@@ -20,6 +20,8 @@
 extern int verbose;
 extern int prefer_ata12;
 
+static const unsigned int default_timeout_secs = 15;
+
 /*
  * Taskfile layout for SG_ATA_16 cdb:
  *
@@ -53,6 +55,30 @@ extern int prefer_ata12;
  *	SG_DXFER_TO_DEV, SG_DXFER_FROM_DEV, SG_DXFER_NONE
  */
 
+#if 0  /* maybe use this in sg16 later.. ? */
+static inline int get_rw (__u8 ata_op)
+{
+	switch (ata_op) {
+		case ATA_OP_DSM:
+		case ATA_OP_WRITE_PIO:
+		case ATA_OP_WRITE_LONG:
+		case ATA_OP_WRITE_LONG_ONCE:
+		case ATA_OP_WRITE_PIO_EXT:
+		case ATA_OP_WRITE_DMA_EXT:
+		case ATA_OP_WRITE_FPDMA:
+		case ATA_OP_WRITE_UNC_EXT:
+		case ATA_OP_WRITE_DMA:
+		case ATA_OP_SECURITY_UNLOCK:
+		case ATA_OP_SECURITY_DISABLE:
+		case ATA_OP_SECURITY_ERASE_UNIT:
+		case ATA_OP_SECURITY_SET_PASS:
+			return SG_WRITE;
+		default:
+			return SG_READ;
+	}
+}
+#endif
+
 static inline int needs_lba48 (__u8 ata_op, __u64 lba, unsigned int nsect)
 {
 	switch (ata_op) {
@@ -66,8 +92,12 @@ static inline int needs_lba48 (__u8 ata_op, __u64 lba, unsigned int nsect)
 		case ATA_OP_READ_NATIVE_MAX_EXT:
 		case ATA_OP_SET_MAX_EXT:
 		case ATA_OP_FLUSHCACHE_EXT:
-		case 0xfd:	/* vertex_trim */
 			return 1;
+		case ATA_OP_SECURITY_ERASE_PREPARE:
+		case ATA_OP_SECURITY_ERASE_UNIT:
+		case ATA_OP_VENDOR_SPECIFIC_0x80:
+		case ATA_OP_SMART:
+			return 0;
 	}
 	if (lba >= lba28_limit)
 		return 1;
@@ -163,10 +193,16 @@ int sg16 (int fd, int rw, int dma, struct ata_tf *tf,
 	unsigned char cdb[SG_ATA_16_LEN];
 	unsigned char sb[32], *desc;
 	struct scsi_sg_io_hdr io_hdr;
+	int prefer12 = prefer_ata12, demanded_sense = 0;
+
+	if (tf->command == ATA_OP_PIDENTIFY)
+		prefer12 = 0;
 
 	memset(&cdb, 0, sizeof(cdb));
 	memset(&sb,     0, sizeof(sb));
 	memset(&io_hdr, 0, sizeof(struct scsi_sg_io_hdr));
+	if (data && data_bytes && !rw)
+		memset(data, 0, data_bytes);
 
 	if (dma) {
 		//cdb[1] = data ? (rw ? SG_ATA_PROTO_UDMA_OUT : SG_ATA_PROTO_UDMA_IN) : SG_ATA_PROTO_NON_DATA;
@@ -174,13 +210,16 @@ int sg16 (int fd, int rw, int dma, struct ata_tf *tf,
 	} else {
 		cdb[1] = data ? (rw ? SG_ATA_PROTO_PIO_OUT : SG_ATA_PROTO_PIO_IN) : SG_ATA_PROTO_NON_DATA;
 	}
-	cdb[ 2] = SG_CDB2_CHECK_COND;
+
+	/* libata/AHCI workaround: don't demand sense data for IDENTIFY commands */
 	if (data) {
 		cdb[2] |= SG_CDB2_TLEN_NSECT | SG_CDB2_TLEN_SECTORS;
 		cdb[2] |= rw ? SG_CDB2_TDIR_TO_DEV : SG_CDB2_TDIR_FROM_DEV;
+	} else {
+		cdb[2] = SG_CDB2_CHECK_COND;
 	}
 
-	if (!prefer_ata12 || tf->is_lba48) {
+	if (!prefer12 || tf->is_lba48) {
 		cdb[ 0] = SG_ATA_16;
 		cdb[ 4] = tf->lob.feat;
 		cdb[ 6] = tf->lob.nsect;
@@ -218,12 +257,12 @@ int sg16 (int fd, int rw, int dma, struct ata_tf *tf,
 	io_hdr.cmdp		= cdb;
 	io_hdr.sbp		= sb;
 	io_hdr.pack_id		= tf_to_lba(tf);
-	io_hdr.timeout		= (timeout_secs ? timeout_secs : 5) * 1000; /* msecs */
+	io_hdr.timeout		= (timeout_secs ? timeout_secs : default_timeout_secs) * 1000; /* msecs */
 
 	if (verbose) {
 		dump_bytes("outgoing cdb", cdb, sizeof(cdb));
-		if (data)
-			dump_bytes("data", data, 16);
+		if (rw && data)
+			dump_bytes("outgoing_data", data, data_bytes);
 	}
 
 	if (ioctl(fd, SG_IO, &io_hdr) == -1) {
@@ -236,28 +275,48 @@ int sg16 (int fd, int rw, int dma, struct ata_tf *tf,
 		fprintf(stderr, "SG_IO: ATA_%u status=0x%x, host_status=0x%x, driver_status=0x%x\n",
 			io_hdr.cmd_len, io_hdr.status, io_hdr.host_status, io_hdr.driver_status);
 
-	if (io_hdr.host_status || io_hdr.driver_status != SG_DRIVER_SENSE
-	 || (io_hdr.status && io_hdr.status != SG_CHECK_CONDITION))
-	{
+	if (io_hdr.status && io_hdr.status != SG_CHECK_CONDITION) {
 		if (verbose)
-			fprintf(stderr, "SG_IO: bad response (not CHECK_CONDITION)\n");
+			fprintf(stderr, "SG_IO: bad status: 0x%x\n", io_hdr.status);
+	  	errno = EBADE;
+		return -1;
+	}
+	if (io_hdr.host_status) {
+		if (verbose)
+			fprintf(stderr, "SG_IO: bad host status: 0x%x\n", io_hdr.host_status);
+	  	errno = EBADE;
+		return -1;
+	}
+	if (verbose) {
+		dump_bytes("SG_IO: sb[]", sb, sizeof(sb));
+		if (!rw && data)
+			dump_bytes("incoming_data", data, data_bytes);
+	}
+
+	if (io_hdr.driver_status && (io_hdr.driver_status != SG_DRIVER_SENSE)) {
+		if (verbose)
+			fprintf(stderr, "SG_IO: bad driver status: 0x%x\n", io_hdr.driver_status);
 	  	errno = EBADE;
 		return -1;
 	}
 
 	desc = sb + 8;
-	if (sb[0] != 0x72 || sb[7] < 14 || desc[0] != 0x09 || desc[1] < 0x0c) {
-		if (verbose)
-			dump_bytes("SG_IO: bad/missing sense data, sb[]", sb, sizeof(sb));
-		errno = EBADE;
-		return -1;
+	if (io_hdr.driver_status != SG_DRIVER_SENSE) {
+		if (sb[0] | sb[1] | sb[2] | sb[3] | sb[4] | sb[5] | sb[6] | sb[7] | sb[8] | sb[9]) {
+			static int second_try = 0;
+			if (!second_try++)
+				fprintf(stderr, "SG_IO: questionable sense data, results may be incorrect\n");
+		} else if (demanded_sense) {
+			static int second_try = 0;
+			if (!second_try++)
+				fprintf(stderr, "SG_IO: missing sense data, results may be incorrect\n");
+		}
+	} else if (sb[0] != 0x72 || sb[7] < 14 || desc[0] != 0x09 || desc[1] < 0x0c) {
+		dump_bytes("SG_IO: bad/missing sense data, sb[]", sb, sizeof(sb));
 	}
 
-	if (verbose)
-		dump_bytes("SG_IO: sb[]", sb, sizeof(sb));
-
 	if (verbose) {
-		int len = desc[1], maxlen = sizeof(sb) - 8 - 2;
+		unsigned int len = desc[1] + 2, maxlen = sizeof(sb) - 8 - 2;
 		if (len > maxlen)
 			len = maxlen;
 		dump_bytes("SG_IO: desc[]", desc, len);
@@ -301,7 +360,7 @@ int sg16 (int fd, int rw, int dma, struct ata_tf *tf,
 
 #endif /* SG_IO */
 
-int do_drive_cmd (int fd, unsigned char *args)
+int do_drive_cmd (int fd, unsigned char *args, unsigned int timeout_secs)
 {
 #ifdef SG_IO
 
@@ -314,13 +373,20 @@ int do_drive_cmd (int fd, unsigned char *args)
 		goto use_legacy_ioctl;
 	/*
 	 * Reformat and try to issue via SG_IO:
+	 * args[0]: command in; status out.
+	 * args[1]: lbal for SMART, nsect for all others; error out
+	 * args[2]: feat in; nsect out.
+	 * args[3]: data-count (512 multiple) for all cmds.
 	 */
+	tf_init(&tf, args[0], 0, 0);
+	tf.lob.nsect = args[1];
+	tf.lob.feat  = args[2];
 	if (args[3]) {
-		data_bytes = args[3] * 512;
-		data       = args + 4;
+		data_bytes   = args[3] * 512;
+		data         = args + 4;
+		if (!tf.lob.nsect)
+			tf.lob.nsect = args[3];
 	}
-	tf_init(&tf, args[0], 0, args[1]);
-	tf.lob.feat = args[2];
 	if (tf.command == ATA_OP_SMART) {
 		tf.lob.nsect = args[3];
 		tf.lob.lbal  = args[1];
@@ -328,9 +394,9 @@ int do_drive_cmd (int fd, unsigned char *args)
 		tf.lob.lbah  = 0xc2;
 	}
 
-	rc = sg16(fd, SG_READ, is_dma(tf.command), &tf, data, data_bytes, 0);
+	rc = sg16(fd, SG_READ, is_dma(tf.command), &tf, data, data_bytes, timeout_secs);
 	if (rc == -1) {
-		if (errno == EINVAL || errno == ENODEV)
+		if (errno == EINVAL || errno == ENODEV || errno == EBADE)
 			goto use_legacy_ioctl;
 	}
 
@@ -414,7 +480,7 @@ int do_taskfile_cmd (int fd, struct hdio_taskfile *r, unsigned int timeout_secs)
 
 	rc = sg16(fd, rw, is_dma(tf.command), &tf, data, data_bytes, timeout_secs);
 	if (rc == -1) {
-		if (errno == EINVAL || errno == ENODEV)
+		if (errno == EINVAL || errno == ENODEV || errno == EBADE)
 			goto use_legacy_ioctl;
 	}
 

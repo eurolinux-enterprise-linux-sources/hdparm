@@ -1,13 +1,17 @@
 Summary: A utility for displaying and/or setting hard disk parameters
 Name: hdparm
-Version: 9.16
-Release: 3.4%{?dist}
+Version: 9.43
+Release: 4%{?dist}
 License: BSD and GPLv2
 Group: Applications/System
 URL:    http://sourceforge.net/projects/hdparm/
 Source: http://download.sourceforge.net/hdparm/hdparm-%{version}.tar.gz
-Patch0: hdparm-9.16-geom.patch
-Patch1: hdparm-9.16-strictaliasing.patch
+Patch0: %{name}-9.43-add_param_fibmap_sector.patch
+Patch1: %{name}-9.43-add_param_trim_sectors.patch
+Patch2: %{name}-9.43-man_page_update.patch
+Patch3: %{name}-9.43-ditch_dead_code.patch
+Patch4: %{name}-9.43-close_fd.patch
+Patch5: %{name}-9.43-get_geom.patch
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 ExcludeArch: s390 s390x
 
@@ -18,8 +22,12 @@ performance and to spin down hard drives for power conservation.
 
 %prep
 %setup -q
-%patch0 -p1
-%patch1 -p1
+%patch0 -p1 -b .add_param_fibmap_sector
+%patch1 -p1 -b .add_param_trim_sectors
+%patch2 -p1 -b .man_page_update
+%patch3 -p1 -b .ditch_dead_code
+%patch4 -p1 -b .close_fd
+%patch5 -p1 -b .get_geom
 
 %build
 CFLAGS="$RPM_OPT_FLAGS" make %{?_smp_mflags} STRIP=/bin/true LDFLAGS=
@@ -35,12 +43,24 @@ install -c -m 644 hdparm.8 $RPM_BUILD_ROOT/%{_mandir}/man8
 rm -rf $RPM_BUILD_ROOT
 
 %files
-%defattr(-,root,root)
 %doc hdparm.lsm Changelog LICENSE.TXT README.acoustic TODO
 /sbin/hdparm
 %{_mandir}/man8/hdparm.8*
 
 %changelog
+* Wed Aug 07 2013 Michal Minar <miminar@redhat.com> 9.43-4
+- Fixed division by zero, when getting raid geometry info.
+
+* Sun Jul 21 2013 Michal Minar <miminar@redhat.com> 9.43-3
+- Added patches fixing covscan defects.
+
+* Fri Jul 05 2013 Michal Minar <miminar@redhat.com> 9.43-2
+- Updated man page: added missing arguments.
+
+* Tue Jul 05 2013 Michal Minar <miminar@redhat.com> 9.43-1
+- update to hdparm-9.43
+- Resolves: #639623, #729718, #735887, #807056, #862257, #865408, #892081
+
 * Wed Jun 23 2010 Karsten Hopp <karsten@redhat.com> 9.16-3.4
 - use -fno-strict-aliasing in CFLAGS
 

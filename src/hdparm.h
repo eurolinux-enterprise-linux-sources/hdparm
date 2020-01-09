@@ -18,10 +18,17 @@ int sysfs_get_attr (int fd, const char *attr, const char *fmt, void *val1, void 
 int sysfs_set_attr (int fd, const char *attr, const char *fmt, void *val_p, int verbose);
 int get_dev_geometry (int fd, __u32 *cyls, __u32 *heads, __u32 *sects, __u64 *start_lba, __u64 *nsectors);
 int get_dev_t_geometry (dev_t dev, __u32 *cyls, __u32 *heads, __u32 *sects, __u64 *start_lba, __u64 *nsectors);
-int do_fibmap(const char *file_name, __u64 target_sect, __u64 *target_lba);
+int do_filemap(const char *file_name);
+int do_fallocate_syscall (const char *name, __u64 bytecount);
 int fwdownload(int fd, __u16 *id, const char *fwpath, int xfer_mode);
 void dco_identify_print (__u16 *dco);
 int set_dvdspeed(int fd, int speed);
+int fd_is_raid (int fd);
+
+int  wdidle3_set_timeout (int fd, unsigned char timeout);
+int  wdidle3_get_timeout (int fd, unsigned char *timeout);
+void wdidle3_print_timeout (unsigned char timeout);
+unsigned char wdidle3_msecs_to_timeout (unsigned int msecs);
 
 extern const char *BuffType[4];
 
@@ -73,6 +80,8 @@ enum {	/* ioctl() numbers */
 	HDIO_UNREGISTER_HWIF	= 0x032a,
 	CDROM__SPEED		= 0x5322,
 };
+
+#define START_LBA_UNKNOWN	(~0ull)
 
 /* Some systems define BLKGETSIZE64 with a "u64" arg,
  * but without supplying a typedef for u64.
