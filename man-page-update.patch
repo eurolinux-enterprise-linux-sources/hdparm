@@ -1,0 +1,14 @@
+Index: hdparm-9.43/hdparm.8
+===================================================================
+--- hdparm-9.43.orig/hdparm.8
++++ hdparm-9.43/hdparm.8
+@@ -677,6 +677,9 @@ provides a safe fix for the problem for
+ Display some basic settings, similar to \-acdgkmur for IDE.
+ This is also the default behaviour when no options are specified.
+ .TP
++.I -V
++Display program version and exit immediately.
++.TP
+ .I --verbose 
+ Display extra diagnostics from some commands.
+ .TP
