@@ -1,7 +1,7 @@
 Summary: A utility for displaying and/or setting hard disk parameters
 Name: hdparm
 Version: 9.43
-Release: 4%{?dist}
+Release: 5%{?dist}
 License: BSD
 Group: Applications/System
 URL:    http://sourceforge.net/projects/hdparm/
@@ -46,6 +46,9 @@ rm -rf $RPM_BUILD_ROOT
 %{_mandir}/man8/hdparm.8*
 
 %changelog
+* Fri Dec 27 2013 Daniel Mach <dmach@redhat.com> - 9.43-5
+- Mass rebuild 2013-12-27
+
 * Wed Aug 07 2013 Michal Minar <miminar@redhat.com> 9.43-4
 - Fixed division by zero.
 - Resolves: #986072
